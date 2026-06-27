@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
-import { Plus, Play, Square, Trash2, Download, Wand2, Music, X, Loader2, Menu, HelpCircle, Copy, Repeat, Search, Upload, ListMusic, Folder, FolderPlus, ChevronDown, ChevronRight, GripVertical, Maximize2, SkipForward, SkipBack } from 'lucide-react';
+import { Plus, Play, Square, Trash2, Download, Wand2, Music, X, Loader2, Menu, HelpCircle, Copy, Repeat, Search, Upload, ListMusic, Folder, FolderPlus, ChevronDown, ChevronRight, ChevronUp, GripVertical, Maximize2, SkipForward, SkipBack } from 'lucide-react';
 
 /* ============================================================
    Trastero — editor + repositorio de tablaturas de guitarra
@@ -709,6 +709,17 @@ export default function App() {
     }
     setDragOverSec(null); dragSec.current = null;
   };
+  const moveSectionBy = (secId, dir) => {
+    setSongs((prev) => {
+      const sg = prev[activeId]; if (!sg) return prev;
+      const list = [...sg.sections];
+      const idx = list.findIndex((s) => s.id === secId);
+      const to = idx + dir;
+      if (idx < 0 || to < 0 || to >= list.length) return prev;
+      [list[idx], list[to]] = [list[to], list[idx]];
+      return { ...prev, [activeId]: { ...sg, sections: list, updatedAt: Date.now() } };
+    });
+  };
   const deleteSection = (secId) => {
     const id = secId || activeSecId;
     if (song.sections.length <= 1) return;
@@ -934,7 +945,7 @@ export default function App() {
           style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 20, outline: 'none', touchAction: 'pan-x pan-y' }}
           onMouseDown={() => { if (!concert) gridRef.current?.focus(); }}>
           <div style={{ zoom: zoom, width: 'fit-content', minWidth: '100%' }}>
-          {song.sections.map((sec) => {
+          {song.sections.map((sec, sidx) => {
             const { mlayout, gutterAfter } = layoutOf(sec);
             const isActiveSec = activeSecId === sec.id;
             return (
@@ -943,10 +954,14 @@ export default function App() {
                 onDrop={(e) => { if (dragSec.current) { e.preventDefault(); moveSection(dragSec.current, sec.id); } }}
                 style={{ marginBottom: 22, borderTop: `2px solid ${dragOverSec === sec.id ? T.amber : 'transparent'}`, paddingTop: dragOverSec === sec.id ? 6 : 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  {!concert && <GripVertical size={15} color={T.mut} title="Arrastra para reordenar la sección" draggable
+                  {!concert && <GripVertical size={15} color={T.mut} title="Arrastra para reordenar (en ordenador)" draggable
                     onDragStart={(e) => { dragSec.current = sec.id; e.dataTransfer.effectAllowed = 'move'; }}
                     onDragEnd={() => { setDragOverSec(null); dragSec.current = null; }}
                     style={{ cursor: 'grab', flexShrink: 0 }} />}
+                  {!concert && <span style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                    <ChevronUp size={15} color={sidx === 0 ? T.edge : T.mut} title="Subir sección" style={{ cursor: sidx === 0 ? 'default' : 'pointer' }} onClick={() => sidx > 0 && moveSectionBy(sec.id, -1)} />
+                    <ChevronDown size={15} color={sidx === song.sections.length - 1 ? T.edge : T.mut} title="Bajar sección" style={{ cursor: sidx === song.sections.length - 1 ? 'default' : 'pointer' }} onClick={() => sidx < song.sections.length - 1 && moveSectionBy(sec.id, 1)} />
+                  </span>}
                   <span style={{ width: 6, height: 18, borderRadius: 3, background: isActiveSec ? T.amber : T.edge, flexShrink: 0 }} />
                   {concert ? (
                     <span style={{ color: T.ink, fontSize: 15, fontWeight: 600, fontFamily: SANS }}>{sec.name || 'Sección'}</span>
