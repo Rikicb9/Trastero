@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
-import { Plus, Play, Square, Trash2, Download, Wand2, Music, X, Loader2, Menu, HelpCircle, Copy, Repeat, Search, Upload, ListMusic, Folder, FolderPlus, ChevronDown, ChevronRight, GripVertical } from 'lucide-react';
+import { Plus, Play, Square, Trash2, Download, Wand2, Music, X, Loader2, Menu, HelpCircle, Copy, Repeat, Search, Upload, ListMusic, Folder, FolderPlus, ChevronDown, ChevronRight, GripVertical, Maximize2, SkipForward, SkipBack } from 'lucide-react';
 
 /* ============================================================
    Trastero — editor + repositorio de tablaturas de guitarra
@@ -242,6 +242,11 @@ export default function App() {
   const [dragOverSec, setDragOverSec] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [narrow, setNarrow] = useState(false);
+  const [toolbarOpen, setToolbarOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 760 : true));
+  const [zoom, setZoom] = useState(() => {
+    try { const z = parseFloat(localStorage.getItem('trastero:zoom:v1')); return z >= 0.4 && z <= 3 ? z : 1; } catch { return 1; }
+  });
+  const pinch = useRef(null);
 
   const synthRef = useRef(null);
   const metroRef = useRef(null);
@@ -276,6 +281,41 @@ export default function App() {
     const onResize = () => { const n = window.innerWidth < 760; setNarrow(n); setSidebarOpen(!n); };
     onResize(); window.addEventListener('resize', onResize); return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Persistir el zoom (local al dispositivo, no se sincroniza)
+  useEffect(() => { try { localStorage.setItem('trastero:zoom:v1', String(zoom)); } catch { /* */ } }, [zoom]);
+
+  // Mantener la pantalla encendida durante el directo (Wake Lock)
+  useEffect(() => {
+    if (!concert) return;
+    let lock = null, released = false;
+    const acquire = async () => { try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch { /* no soportado */ } };
+    acquire();
+    const onVis = () => { if (document.visibilityState === 'visible' && !released) acquire(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { released = true; document.removeEventListener('visibilitychange', onVis); try { lock && lock.release(); } catch { /* */ } };
+  }, [concert]);
+
+  // Zoom de la partitura con dos dedos (pellizco)
+  useEffect(() => {
+    const el = gridRef.current; if (!el) return;
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onStart = (e) => { if (e.touches.length === 2) { pinch.current = { d0: dist(e.touches), z0: zoom }; } };
+    const onMove = (e) => {
+      if (e.touches.length === 2 && pinch.current) {
+        e.preventDefault();
+        const ratio = dist(e.touches) / (pinch.current.d0 || 1);
+        const z = Math.max(0.5, Math.min(2.5, pinch.current.z0 * ratio));
+        setZoom(Math.round(z * 100) / 100);
+      }
+    };
+    const onEnd = (e) => { if (e.touches.length < 2) pinch.current = null; };
+    el.addEventListener('touchstart', onStart, { passive: false });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return () => { el.removeEventListener('touchstart', onStart); el.removeEventListener('touchmove', onMove); el.removeEventListener('touchend', onEnd); el.removeEventListener('touchcancel', onEnd); };
+  }, [zoom]);
 
   // Persistir preferencia de notación
   useEffect(() => { if (loaded) store.saveSettings({ notation, latencyOffset }); }, [notation, latencyOffset, loaded]);
@@ -541,6 +581,25 @@ export default function App() {
     return (os.length ? Math.min(...os) : 0) - 1;
   };
   const selectSong = (id) => { setActiveId(id); setActiveSecId(songs[id].sections[0].id); setCursor({ col: 0, str: 0 }); stop(); if (narrow) setSidebarOpen(false); };
+
+  // --- Modo Concierto (directo) ---
+  const [concert, setConcert] = useState(null); // { ids: [...songId], i }
+  const goToSong = (id) => { const s = songs[id]; if (!s) return; setActiveId(id); setActiveSecId(s.sections[0].id); setCursor({ col: 0, str: 0 }); stop(); requestAnimationFrame(() => { if (gridRef.current) gridRef.current.scrollTo(0, 0); }); };
+  const startConcert = (folderId, startId) => {
+    const ids = inFolder(folderId).map((s) => s.id);
+    if (!ids.length) return;
+    let i = startId ? ids.indexOf(startId) : 0; if (i < 0) i = 0;
+    setSidebarOpen(false); setConcert({ ids, i }); goToSong(ids[i]);
+  };
+  const concertStep = (delta) => {
+    setConcert((c) => {
+      if (!c) return c;
+      const i = Math.max(0, Math.min(c.ids.length - 1, c.i + delta));
+      goToSong(c.ids[i]);
+      return { ...c, i };
+    });
+  };
+  const exitConcert = () => { setConcert(null); stop(); };
   const createSong = () => { const s = { ...newSong(), folderId: null, order: topOrder(null) }; setSongs((p) => ({ ...p, [s.id]: s })); setActiveId(s.id); setActiveSecId(s.sections[0].id); setCursor({ col: 0, str: 0 }); };
   // Carpetas
   const addFolder = () => setFolders((f) => [...f, { id: uid(), name: 'Nueva carpeta' }]);
@@ -716,7 +775,7 @@ export default function App() {
       <style>{`@keyframes spin{to{transform:rotate(360deg)}} input,select,textarea,button{outline:none} *::selection{background:${T.amber};color:#1A1714}`}</style>
 
       {/* Sidebar / repositorio */}
-      {sidebarOpen && (
+      {sidebarOpen && !concert && (
         <aside style={{ width: 250, flexShrink: 0, background: T.surface, borderRight: `1px solid ${T.edge}`, padding: 16, display: 'flex', flexDirection: 'column', gap: 12, position: narrow ? 'fixed' : 'relative', height: narrow ? '100vh' : 'auto', zIndex: 20 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span style={{ fontFamily: MONO, fontSize: 20, letterSpacing: 1, color: T.amber }}>Trastero</span>
@@ -749,6 +808,7 @@ export default function App() {
                     <Folder size={13} color={T.amber} style={{ flexShrink: 0 }} />
                     <input value={f.name} onChange={(e) => renameFolder(f.id, e.target.value)} style={{ flex: 1, background: 'transparent', border: 'none', color: T.ink, fontSize: 12, fontWeight: 600, fontFamily: SANS, minWidth: 0 }} />
                     <span style={{ fontSize: 10, color: T.mut, flexShrink: 0 }}>{list.length}</span>
+                    {list.length > 0 && <Maximize2 size={12} color={T.amber} style={{ cursor: 'pointer', flexShrink: 0 }} title="Modo concierto (toca esta carpeta como setlist)" onClick={(e) => { e.stopPropagation(); startConcert(f.id); }} />}
                     <Trash2 size={12} color={T.mut} style={{ cursor: 'pointer', flexShrink: 0 }} title="Eliminar carpeta (las canciones pasan a Sin carpeta)" onClick={() => deleteFolder(f.id)} />
                   </div>
                   {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 4, marginTop: 2 }}>
@@ -762,7 +822,10 @@ export default function App() {
               onDragOver={(e) => { e.preventDefault(); if (dragSong.current) setDragOver({ type: 'root', id: 'root' }); }}
               onDrop={(e) => { e.preventDefault(); if (dragSong.current) moveSong(dragSong.current, null, null); }}
               style={{ border: `1px solid ${dragOver && dragOver.type === 'root' ? T.amber : 'transparent'}`, borderRadius: 8, padding: 2 }}>
-              {folders.length > 0 && <div style={{ fontSize: 10, color: T.mut, textTransform: 'uppercase', letterSpacing: 1, padding: '2px 4px' }}>Sin carpeta</div>}
+              {folders.length > 0 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 4px' }}>
+                <span style={{ fontSize: 10, color: T.mut, textTransform: 'uppercase', letterSpacing: 1 }}>Sin carpeta</span>
+                {inFolder(null).length > 0 && <Maximize2 size={12} color={T.amber} style={{ cursor: 'pointer' }} title="Modo concierto con estas canciones" onClick={() => startConcert(null)} />}
+              </div>}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{inFolder(null).map(SongRow)}</div>
             </div>
           </div>
@@ -777,17 +840,40 @@ export default function App() {
       )}
 
       {/* Editor */}
-      <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {/* Cabecera de Concierto */}
+        {concert && (
+          <div style={{ padding: '12px 16px', borderBottom: `2px solid ${T.amber}`, background: T.surface, display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button onClick={exitConcert} title="Salir del modo concierto" style={{ ...btn({ padding: 8 }), flexShrink: 0 }}><X size={18} /></button>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{song.title || 'Sin título'}</div>
+              <div style={{ fontSize: 13, color: T.mut, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {song.artist || '—'}{(song.tags && song.tags.length) ? '  ·  ' + song.tags.join(' · ') : ''}
+              </div>
+            </div>
+            <span style={{ fontFamily: MONO, fontSize: 14, color: T.amber, flexShrink: 0 }}>{concert.i + 1} / {concert.ids.length}</span>
+            <button onClick={() => play('all')} disabled={isPlaying} title="Reproducir" style={{ ...btn({ padding: 10 }), flexShrink: 0 }}>{isPlaying ? <Square size={18} /> : <Play size={18} />}</button>
+            <button onClick={() => setMetronome((v) => !v)} title="Metrónomo" style={{ ...btn({ padding: 10, background: metronome ? T.amber : T.surface, color: metronome ? '#1A1714' : T.ink, border: metronome ? 'none' : `1px solid ${T.edge}` }), flexShrink: 0 }}><Music size={18} /></button>
+            <button onClick={() => concertStep(-1)} disabled={concert.i === 0} title="Anterior" style={{ ...btn({ padding: 12, opacity: concert.i === 0 ? 0.4 : 1 }), flexShrink: 0 }}><SkipBack size={20} /></button>
+            <button onClick={() => concertStep(1)} disabled={concert.i >= concert.ids.length - 1}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: concert.i >= concert.ids.length - 1 ? T.surface : T.amber, color: concert.i >= concert.ids.length - 1 ? T.mut : '#1A1714', border: 'none', borderRadius: 10, padding: '14px 22px', fontSize: 17, fontWeight: 700, cursor: concert.i >= concert.ids.length - 1 ? 'default' : 'pointer', fontFamily: SANS, flexShrink: 0 }}>
+              Siguiente <SkipForward size={20} />
+            </button>
+          </div>
+        )}
         {/* Toolbar */}
+        {!concert && (
         <div style={{ padding: 14, borderBottom: `1px solid ${T.edge}`, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {narrow && <button style={btn({ padding: 8 })} onClick={() => setSidebarOpen((v) => !v)}><Menu size={16} /></button>}
+          <button style={btn({ padding: 8 })} onClick={() => setToolbarOpen((v) => !v)} title={toolbarOpen ? 'Ocultar controles' : 'Mostrar controles'}>{toolbarOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button>
           <input value={song.title} onChange={(e) => updateSong(activeId, { title: e.target.value })} placeholder="Título"
-            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${T.edge}`, color: T.ink, fontSize: 17, padding: '4px 2px', width: 200, fontFamily: SANS }} />
-          <input value={song.artist} onChange={(e) => updateSong(activeId, { artist: e.target.value })} placeholder="Artista"
-            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${T.edge}`, color: T.mut, fontSize: 13, padding: '4px 2px', width: 120, fontFamily: SANS }} />
-          <input value={(song.tags || []).join(', ')} onChange={(e) => updateSong(activeId, { tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) })} placeholder="Etiquetas"
-            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${T.edge}`, color: T.mut, fontSize: 12, padding: '4px 2px', width: 110, fontFamily: SANS }} />
+            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${T.edge}`, color: T.ink, fontSize: 17, padding: '4px 2px', width: narrow ? 130 : 200, fontFamily: SANS }} />
+          {toolbarOpen && <input value={song.artist} onChange={(e) => updateSong(activeId, { artist: e.target.value })} placeholder="Artista"
+            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${T.edge}`, color: T.mut, fontSize: 13, padding: '4px 2px', width: 120, fontFamily: SANS }} />}
+          {toolbarOpen && <input value={(song.tags || []).join(', ')} onChange={(e) => updateSong(activeId, { tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) })} placeholder="Etiquetas"
+            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${T.edge}`, color: T.mut, fontSize: 12, padding: '4px 2px', width: 110, fontFamily: SANS }} />}
           <div style={{ flex: 1 }} />
+          {toolbarOpen && <>
           <select value={song.tuningKey} onChange={(e) => updateSong(activeId, { tuningKey: e.target.value })} style={btn({ appearance: 'none' })}>
             {Object.entries(TUNINGS).map(([k, v]) => <option key={k} value={k} style={{ background: T.surface }}>{v.name}</option>)}
           </select>
@@ -815,11 +901,14 @@ export default function App() {
           </select>
           <button style={btn({ background: metronome ? T.amber : T.surface, color: metronome ? '#1A1714' : T.ink, border: metronome ? 'none' : `1px solid ${T.edge}`, padding: 8 })} onClick={() => setMetronome((v) => !v)} title="Metrónomo (al ritmo de los BPM)"><Music size={15} /></button>
           <button style={btn({ background: loop ? T.amber : T.surface, color: loop ? '#1A1714' : T.ink, border: loop ? 'none' : `1px solid ${T.edge}`, padding: 8 })} onClick={() => setLoop((v) => !v)} title="Bucle de la sección"><Repeat size={15} /></button>
+          </>}
           <button style={btn({ background: isPlaying ? T.copper : T.surface, color: isPlaying ? '#1A1714' : T.ink, border: isPlaying ? 'none' : `1px solid ${T.edge}` })} onClick={() => play('section')}>{isPlaying ? <Square size={15} /> : <Play size={15} />}{isPlaying ? 'Detener' : 'Sección'}</button>
           <button style={btn()} onClick={() => play('all')} disabled={isPlaying} title="Reproducir toda la canción"><ListMusic size={15} /> Todo</button>
-          <button style={btn()} onClick={() => setExportOpen(true)}><Download size={15} /> Exportar</button>
-          <button style={btn({ padding: 8 })} onClick={() => setHelpOpen((v) => !v)} title="Ayuda"><HelpCircle size={16} /></button>
+          {toolbarOpen && <button style={btn()} onClick={() => setExportOpen(true)}><Download size={15} /> Exportar</button>}
+          {toolbarOpen && <button style={btn({ padding: 8 })} onClick={() => setHelpOpen((v) => !v)} title="Ayuda"><HelpCircle size={16} /></button>}
+          <button style={btn({ background: T.amber, color: '#1A1714', border: 'none', fontWeight: 600 })} onClick={() => startConcert(song.folderId || null, activeId)} title="Modo concierto: setlist = canciones de esta carpeta, en orden"><Maximize2 size={15} /> Concierto</button>
         </div>
+        )}
 
         {helpOpen && (
           <div style={{ padding: '12px 16px', background: T.surface, borderBottom: `1px solid ${T.edge}`, fontSize: 12.5, color: T.mut, lineHeight: 1.7 }}>
@@ -835,9 +924,10 @@ export default function App() {
         )}
 
         {/* Rejilla de tablatura — todas las secciones apiladas (canción completa) */}
-        <div ref={gridRef} tabIndex={0} onKeyDown={handleKey}
-          style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 20, outline: 'none' }}
-          onMouseDown={() => gridRef.current?.focus()}>
+        <div ref={gridRef} tabIndex={concert ? -1 : 0} onKeyDown={concert ? undefined : handleKey}
+          style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 20, outline: 'none', touchAction: 'pan-x pan-y' }}
+          onMouseDown={() => { if (!concert) gridRef.current?.focus(); }}>
+          <div style={{ zoom: zoom, width: 'fit-content', minWidth: '100%' }}>
           {song.sections.map((sec) => {
             const { mlayout, gutterAfter } = layoutOf(sec);
             const isActiveSec = activeSecId === sec.id;
@@ -847,21 +937,25 @@ export default function App() {
                 onDrop={(e) => { if (dragSec.current) { e.preventDefault(); moveSection(dragSec.current, sec.id); } }}
                 style={{ marginBottom: 22, borderTop: `2px solid ${dragOverSec === sec.id ? T.amber : 'transparent'}`, paddingTop: dragOverSec === sec.id ? 6 : 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <GripVertical size={15} color={T.mut} title="Arrastra para reordenar la sección" draggable
+                  {!concert && <GripVertical size={15} color={T.mut} title="Arrastra para reordenar la sección" draggable
                     onDragStart={(e) => { dragSec.current = sec.id; e.dataTransfer.effectAllowed = 'move'; }}
                     onDragEnd={() => { setDragOverSec(null); dragSec.current = null; }}
-                    style={{ cursor: 'grab', flexShrink: 0 }} />
+                    style={{ cursor: 'grab', flexShrink: 0 }} />}
                   <span style={{ width: 6, height: 18, borderRadius: 3, background: isActiveSec ? T.amber : T.edge, flexShrink: 0 }} />
+                  {concert ? (
+                    <span style={{ color: T.ink, fontSize: 15, fontWeight: 600, fontFamily: SANS }}>{sec.name || 'Sección'}</span>
+                  ) : (
                   <input value={sec.name} onChange={(e) => updateSection(sec.id, (s) => ({ ...s, name: e.target.value }))} onFocus={() => { setActiveSecId(sec.id); setCursor({ col: 0, str: 0 }); }}
                     style={{ background: 'transparent', border: 'none', color: T.ink, fontSize: 15, fontWeight: 600, fontFamily: SANS, width: 200, minWidth: 0 }} placeholder="Nombre de sección" />
-                  <span style={{ display: 'flex', border: `1px solid ${T.edge}`, borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
+                  )}
+                  {!concert && <span style={{ display: 'flex', border: `1px solid ${T.edge}`, borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
                     {[['tab', 'Tab'], ['chords', 'Acordes']].map(([tp, lbl]) => (
                       <button key={tp} onClick={() => setSectionType(sec.id, tp)}
                         style={{ padding: '5px 10px', fontSize: 11, border: 'none', cursor: 'pointer', background: (sec.type || 'tab') === tp ? T.amber : 'transparent', color: (sec.type || 'tab') === tp ? '#1A1714' : T.mut, fontFamily: SANS, fontWeight: 600 }}>{lbl}</button>
                     ))}
-                  </span>
-                  <button style={btn({ padding: 6 })} title="Reproducir esta sección" onClick={() => { setActiveSecId(sec.id); play('section', sec.id); }}><Play size={13} /></button>
-                  {song.sections.length > 1 && <button style={btn({ padding: 6 })} title="Eliminar sección" onClick={() => deleteSection(sec.id)}><Trash2 size={13} /></button>}
+                  </span>}
+                  {!concert && <button style={btn({ padding: 6 })} title="Reproducir esta sección" onClick={() => { setActiveSecId(sec.id); play('section', sec.id); }}><Play size={13} /></button>}
+                  {!concert && song.sections.length > 1 && <button style={btn({ padding: 6 })} title="Eliminar sección" onClick={() => deleteSection(sec.id)}><Trash2 size={13} /></button>}
                 </div>
                 {(sec.type || 'tab') === 'tab' ? (
                 <div style={{ display: 'inline-block', background: T.panel, border: `1px solid ${T.edge}`, borderRadius: 10, padding: '12px 8px', boxShadow: isActiveSec ? `0 0 0 1.5px ${T.amber}55` : 'none' }}>
@@ -942,7 +1036,7 @@ export default function App() {
                         );
                       })}
                     </div>
-                    <button onClick={() => addMeasureEnd(sec.id)} title="Añadir compás" style={{ ...btn({ padding: 4 }), height: ROWH * 6, marginLeft: 6, alignItems: 'center' }}><Plus size={14} /></button>
+                    {!concert && <button onClick={() => addMeasureEnd(sec.id)} title="Añadir compás" style={{ ...btn({ padding: 4 }), height: ROWH * 6, marginLeft: 6, alignItems: 'center' }}><Plus size={14} /></button>}
                   </div>
                 </div>
                 ) : (
@@ -954,27 +1048,36 @@ export default function App() {
                       return (
                         <div key={i} data-sec={sec.id} data-col={i} onMouseEnter={() => setHoverBar(hk)} onMouseLeave={() => setHoverBar(null)}
                           style={{ position: 'relative', width: 74, height: 56, borderRadius: 8, border: `1px solid ${playing ? T.copper : T.edge}`, background: playing ? 'rgba(210,103,74,0.16)' : T.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <input value={ch} onChange={(e) => setChord(sec.id, i, e.target.value)} onFocus={() => setActiveSecId(sec.id)} placeholder="—"
+                          <input value={ch} readOnly={!!concert} onChange={(e) => setChord(sec.id, i, e.target.value)} onFocus={() => setActiveSecId(sec.id)} placeholder="—"
                             style={{ width: '100%', textAlign: 'center', background: 'transparent', border: 'none', color: T.ink, fontFamily: MONO, fontSize: 17, fontWeight: 600 }} />
-                          {hoverBar === hk && (sec.chords || []).length > 1 && <Trash2 size={12} color={T.mut} style={{ position: 'absolute', top: 3, right: 3, cursor: 'pointer' }} onClick={() => removeChord(sec.id, i)} />}
+                          {!concert && hoverBar === hk && (sec.chords || []).length > 1 && <Trash2 size={12} color={T.mut} style={{ position: 'absolute', top: 3, right: 3, cursor: 'pointer' }} onClick={() => removeChord(sec.id, i)} />}
                         </div>
                       );
                     })}
-                    <button onClick={() => addChord(sec.id)} title="Añadir acorde" style={{ width: 42, height: 56, borderRadius: 8, border: `1px dashed ${T.edge}`, background: 'transparent', color: T.mut, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={16} /></button>
+                    {!concert && <button onClick={() => addChord(sec.id)} title="Añadir acorde" style={{ width: 42, height: 56, borderRadius: 8, border: `1px dashed ${T.edge}`, background: 'transparent', color: T.mut, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={16} /></button>}
                   </div>
-                  <div style={{ fontSize: 11, color: T.mut, marginTop: 8 }}>Escribe el acorde (C, Am, G7, Do, Lam, Sol7…). Se reproduce al dar a play.</div>
+                  {!concert && <div style={{ fontSize: 11, color: T.mut, marginTop: 8 }}>Escribe el acorde (C, Am, G7, Do, Lam, Sol7…). Se reproduce al dar a play.</div>}
                 </div>
                 )}
               </div>
             );
           })}
-          <div style={{ display: 'flex', gap: 8 }}>
+          {!concert && <div style={{ display: 'flex', gap: 8 }}>
             <button style={btn({ background: 'transparent' })} onClick={() => addSection('tab')}><Plus size={15} /> Sección de tablatura</button>
             <button style={btn({ background: 'transparent' })} onClick={() => addSection('chords')}><Plus size={15} /> Rueda de acordes</button>
+          </div>}
           </div>
         </div>
 
+        {/* Zoom flotante de la partitura */}
+        <div style={{ position: 'absolute', left: 14, bottom: 70, zIndex: 30, display: 'flex', alignItems: 'center', gap: 2, background: T.surface, border: `1px solid ${T.edge}`, borderRadius: 20, padding: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
+          <button onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.1) * 100) / 100))} title="Reducir" style={{ width: 30, height: 30, borderRadius: 15, border: 'none', background: 'transparent', color: T.ink, fontSize: 18, cursor: 'pointer' }}>−</button>
+          <button onClick={() => setZoom(1)} title="Tamaño normal" style={{ minWidth: 42, height: 30, borderRadius: 15, border: 'none', background: 'transparent', color: T.mut, fontSize: 11, fontFamily: MONO, cursor: 'pointer' }}>{Math.round(zoom * 100)}%</button>
+          <button onClick={() => setZoom((z) => Math.min(2.5, Math.round((z + 0.1) * 100) / 100))} title="Ampliar" style={{ width: 30, height: 30, borderRadius: 15, border: 'none', background: 'transparent', color: T.ink, fontSize: 18, cursor: 'pointer' }}>+</button>
+        </div>
+
         {/* Barra de comandos en lenguaje natural */}
+        {!concert && (
         <div style={{ padding: 14, borderTop: `1px solid ${T.edge}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ position: 'relative', flex: 1 }}>
@@ -989,6 +1092,7 @@ export default function App() {
           </div>
           {nlMsg && <div style={{ fontSize: 12, color: T.mut }}>{nlMsg}</div>}
         </div>
+        )}
       </main>
 
       {/* Modal exportar */}
