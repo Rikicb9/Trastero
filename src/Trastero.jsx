@@ -590,6 +590,7 @@ export default function App() {
     if (!ids.length) return;
     let i = startId ? ids.indexOf(startId) : 0; if (i < 0) i = 0;
     setSidebarOpen(false); setConcert({ ids, i }); goToSong(ids[i]);
+    try { const el = document.documentElement; if (el.requestFullscreen) el.requestFullscreen().catch(() => {}); } catch { /* no soportado */ }
   };
   const concertStep = (delta) => {
     setConcert((c) => {
@@ -599,7 +600,7 @@ export default function App() {
       return { ...c, i };
     });
   };
-  const exitConcert = () => { setConcert(null); stop(); };
+  const exitConcert = () => { setConcert(null); stop(); try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {}); } catch { /* */ } };
   const createSong = () => { const s = { ...newSong(), folderId: null, order: topOrder(null) }; setSongs((p) => ({ ...p, [s.id]: s })); setActiveId(s.id); setActiveSecId(s.sections[0].id); setCursor({ col: 0, str: 0 }); };
   // Carpetas
   const addFolder = () => setFolders((f) => [...f, { id: uid(), name: 'Nueva carpeta' }]);
@@ -773,6 +774,11 @@ export default function App() {
   return (
     <div style={{ height: '100vh', overflow: 'hidden', background: T.bg, color: T.ink, fontFamily: SANS, display: 'flex' }}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}} input,select,textarea,button{outline:none} *::selection{background:${T.amber};color:#1A1714}`}</style>
+
+      {/* Capa para cerrar el panel al tocar fuera (móvil) */}
+      {narrow && sidebarOpen && !concert && (
+        <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 19 }} />
+      )}
 
       {/* Sidebar / repositorio */}
       {sidebarOpen && !concert && (
@@ -1070,7 +1076,7 @@ export default function App() {
         </div>
 
         {/* Zoom flotante de la partitura */}
-        <div style={{ position: 'absolute', left: 14, bottom: 70, zIndex: 30, display: 'flex', alignItems: 'center', gap: 2, background: T.surface, border: `1px solid ${T.edge}`, borderRadius: 20, padding: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
+        <div style={{ position: 'absolute', right: 14, bottom: 70, zIndex: 30, display: 'flex', alignItems: 'center', gap: 2, background: T.surface, border: `1px solid ${T.edge}`, borderRadius: 20, padding: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
           <button onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.1) * 100) / 100))} title="Reducir" style={{ width: 30, height: 30, borderRadius: 15, border: 'none', background: 'transparent', color: T.ink, fontSize: 18, cursor: 'pointer' }}>−</button>
           <button onClick={() => setZoom(1)} title="Tamaño normal" style={{ minWidth: 42, height: 30, borderRadius: 15, border: 'none', background: 'transparent', color: T.mut, fontSize: 11, fontFamily: MONO, cursor: 'pointer' }}>{Math.round(zoom * 100)}%</button>
           <button onClick={() => setZoom((z) => Math.min(2.5, Math.round((z + 0.1) * 100) / 100))} title="Ampliar" style={{ width: 30, height: 30, borderRadius: 15, border: 'none', background: 'transparent', color: T.ink, fontSize: 18, cursor: 'pointer' }}>+</button>
