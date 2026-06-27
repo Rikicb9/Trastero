@@ -247,6 +247,7 @@ export default function App() {
     try { const z = parseFloat(localStorage.getItem('trastero:zoom:v1')); return z >= 0.4 && z <= 3 ? z : 1; } catch { return 1; }
   });
   const pinch = useRef(null);
+  const [concert, setConcert] = useState(null); // { ids: [...songId], i }
 
   const synthRef = useRef(null);
   const metroRef = useRef(null);
@@ -583,7 +584,6 @@ export default function App() {
   const selectSong = (id) => { setActiveId(id); setActiveSecId(songs[id].sections[0].id); setCursor({ col: 0, str: 0 }); stop(); if (narrow) setSidebarOpen(false); };
 
   // --- Modo Concierto (directo) ---
-  const [concert, setConcert] = useState(null); // { ids: [...songId], i }
   const goToSong = (id) => { const s = songs[id]; if (!s) return; setActiveId(id); setActiveSecId(s.sections[0].id); setCursor({ col: 0, str: 0 }); stop(); requestAnimationFrame(() => { if (gridRef.current) gridRef.current.scrollTo(0, 0); }); };
   const startConcert = (folderId, startId) => {
     const ids = inFolder(folderId).map((s) => s.id);
